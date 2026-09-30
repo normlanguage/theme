@@ -1,0 +1,243 @@
+package theme
+
+import std.io.Resource
+import std.io.ResourceOwner
+import std.context.currentContext
+import std.core.Exception
+
+interface ThemeSource {
+  Theme current()
+  Resource watch(Void changed(Theme theme))
+}
+
+interface ThemeScope extends ThemeSource, Resource {
+  Void setOverride(ThemeOverride override)
+  ThemeScope scope(ThemeOverride override)
+}
+
+class ThemeManager implements ThemeSource, Resource {
+  private ThemeNode root
+
+  ThemeManager(ThemeDefinition definition, ThemeMode mode = ThemeMode.Light) {
+    root = ThemeNode(tree: ThemeTree(), snapshot: generateTheme(definition, mode))
+    root.attachOwner(this)
+  }
+
+  Theme current() { root.current() }
+  Resource watch(Void changed(Theme theme)) { root.watch(changed) }
+  ThemeScope scope(ThemeOverride override) { root.scope(override) }
+  Void setMode(ThemeMode mode) {
+    root.submit(() { root.configure(definition: root.snapshot.definition, mode: mode) })
+  }
+  Void setDefinition(ThemeDefinition definition) {
+    root.submit(() { root.configure(definition: definition, mode: root.snapshot.mode) })
+  }
+  Void configure(ThemeDefinition definition, ThemeMode mode) {
+    root.submit(() { root.configure(definition: definition, mode: mode) })
+  }
+  Void close() { root.close() }
+}
+
+private class ThemeBranch implements ThemeScope {
+  ThemeNode node
+  Theme current() { node.current() }
+  Resource watch(Void changed(Theme theme)) { node.watch(changed) }
+  ThemeScope scope(ThemeOverride override) { node.scope(override) }
+  Void setOverride(ThemeOverride override) {
+    node.submit(() {
+      if node.localOverride == override { return }
+      var parent = node.parent
+      if parent == null { throw Exception(message: "Theme scope has no parent") }
+      Theme next = inheritTheme(parent: parent!!.snapshot, override)
+      var changes = node.prepare(next)
+      node.localOverride = override
+      node.tree.publish(changes)
+    })
+  }
+  Void close() { node.close() }
+}
+
+private value ThemeChange {
+  ThemeNode node
+  Theme next
+}
+
+private class ThemeTree {
+  Boolean updating = false
+  List<Function<Void()>> pending = []
+
+  Void submit(Function<Void()> action) {
+    pending.add(action)
+    if updating { return }
+    updating = true
+    Exception? failure = null
+    try {
+      for pending.size() > 0 {
+        var batch = pending
+        pending = []
+        for work : batch {
+          try { work() }
+          catch Exception error { if failure == null { failure = error } }
+        }
+      }
+    } finally { updating = false }
+    var error = failure
+    if error != null { throw error }
+  }
+
+  Void publish(List<ThemeChange> changes) {
+    for change : changes { change.node.snapshot = change.next }
+    List<ThemeDelivery> deliveries = []
+    for change : changes {
+      for listener : change.node.listeners {
+        deliveries.add(ThemeDelivery(listener, theme: change.next))
+      }
+    }
+    Exception? failure = null
+    for delivery : deliveries {
+      try { delivery.listener.deliver(delivery.theme) }
+      catch Exception error { if failure == null { failure = error } }
+    }
+    var error = failure
+    if error != null { throw error }
+  }
+}
+
+private value ThemeDelivery {
+  ThemeListener listener
+  Theme theme
+}
+
+private class ThemeNode implements Resource {
+  ThemeTree tree
+  Theme snapshot
+  ThemeNode? parent = null
+  ThemeOverride localOverride = ThemeOverride()
+  Boolean closed = false
+  List<ThemeNode> children = []
+  List<ThemeListener> listeners = []
+  ResourceOwner? owner = null
+  Resource? ownedResource = null
+
+  Void attachOwner(Resource resource) {
+    owner = currentContext<ResourceOwner>()
+    ownedResource = resource
+    try { owner?.own(resource) }
+    catch Exception error { this.close() throw error }
+  }
+
+  Theme current() { snapshot }
+
+  Resource watch(Function<Void(Theme)> changed) {
+    if closed { throw Exception(message: "Theme source is closed") }
+    var listener = ThemeListener(node: this, changed: changed, owner: currentContext<ResourceOwner>())
+    listeners.add(listener)
+    try {
+      listener.owner?.own(listener)
+      if tree.updating { listener.deliver(snapshot) }
+      else { tree.submit(() { listener.deliver(snapshot) }) }
+    } catch Exception error { listener.close() throw error }
+    return listener
+  }
+
+  ThemeScope scope(ThemeOverride override) {
+    if closed { throw Exception(message: "Theme source is closed") }
+    var child = ThemeNode(tree: tree, snapshot: inheritTheme(parent: snapshot, override: override), parent: this, localOverride: override)
+    var branch = ThemeBranch(node: child)
+    children.add(child)
+    child.attachOwner(branch)
+    return branch
+  }
+
+  Void submit(Function<Void()> action) {
+    if closed { throw Exception(message: "Theme source is closed") }
+    tree.submit(() { if !closed { action() } })
+  }
+
+  List<ThemeChange> prepare(Theme next) {
+    List<ThemeChange> changes = []
+    if closed || snapshot == next { return changes }
+    changes.add(ThemeChange(node: this, next))
+    for child : children {
+      for change : child.prepare(inheritTheme(parent: next, override: child.localOverride)) { changes.add(change) }
+    }
+    return changes
+  }
+
+  Void configure(ThemeDefinition definition, ThemeMode mode) {
+    if snapshot.definition == definition && snapshot.mode == mode { return }
+    tree.publish(this.prepare(generateTheme(definition: definition, mode: mode)))
+  }
+
+  Void close() {
+    if closed { return }
+    closed = true
+    var oldChildren = children
+    var oldListeners = listeners
+    children = []
+    listeners = []
+    var oldParent = parent
+    parent = null
+    if oldParent != null { oldParent.children = [for (child : oldParent.children) if (child != this) child] }
+    var oldOwner = owner
+    var resource = ownedResource
+    owner = null
+    ownedResource = null
+    Exception? failure = null
+    for child : oldChildren {
+      try { child.close() } catch Exception error { if failure == null { failure = error } }
+    }
+    for listener : oldListeners {
+      try { listener.close() } catch Exception error { if failure == null { failure = error } }
+    }
+    try { if resource != null { oldOwner?.release(resource) } }
+    catch Exception error { if failure == null { failure = error } }
+    var error = failure
+    if error != null { throw error }
+  }
+}
+
+private class ThemeListener implements Resource {
+  ThemeNode? node
+  Function<Void(Theme)>? changed
+  ResourceOwner? owner = null
+  Boolean closed = false
+
+  Void deliver(Theme theme) {
+    var source = node
+    var callback = changed
+    if closed || source == null || callback == null { return }
+    if source.closed { return }
+    var context = owner
+    if context == null { callback(theme) }
+    else { context.execute(() { if !closed && !source.closed { callback(theme) } }) }
+  }
+
+  Void close() {
+    if closed { return }
+    closed = true
+    var source = node
+    node = null
+    changed = null
+    if source != null { source.listeners = [for (listener : source.listeners) if (listener != this) listener] }
+    var previous = owner
+    owner = null
+    previous?.release(this)
+  }
+}
+
+private Theme inheritTheme(Theme parent, ThemeOverride override) {
+  var base = parent.definition
+  return generateTheme(
+    ThemeDefinition(
+      primary: override.primary ?? base.primary,
+      secondary: if override.secondary != null { override.secondary } else { base.secondary },
+      neutral: if override.neutral != null { override.neutral } else { base.neutral },
+      success: override.success ?? base.success,
+      warning: override.warning ?? base.warning,
+      danger: override.danger ?? base.danger,
+      info: override.info ?? base.info
+    ),
+    mode: override.mode ?? parent.mode
+  )
+}

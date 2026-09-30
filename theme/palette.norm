@@ -1,0 +1,101 @@
+package theme
+
+import std.core.Exception
+
+enum ThemeMode { Light, Dark }
+enum Tone { Neutral, Primary, Secondary, Success, Warning, Danger, Info }
+enum Appearance { Filled, Soft, Outlined, Plain }
+
+value ThemeDefinition {
+  Color primary
+  Color? secondary = null
+  Color? neutral = null
+  Color success = Color(hex: "#2E7D32")
+  Color warning = Color(hex: "#A65F00")
+  Color danger = Color(hex: "#BA1A1A")
+  Color info = Color(hex: "#0061A4")
+}
+
+value ThemeOverride {
+  ThemeMode? mode = null
+  Color? primary = null
+  Color? secondary = null
+  Color? neutral = null
+  Color? success = null
+  Color? warning = null
+  Color? danger = null
+  Color? info = null
+}
+
+value Theme {
+  ThemeDefinition definition
+  ThemeMode mode
+  ColorPair canvas
+  ColorPair surface
+  ColorPair surfaceRaised
+  Color textMuted
+  Color outline
+  Color divider
+  Color scrim
+
+  ControlColors control(Tone tone = Tone.Neutral, Appearance appearance = Appearance.Filled, Boolean selected = false) {
+    Color seed = switch tone {
+      case Neutral { break definition.neutral ?? definition.primary.tone(0.5, chromaScale: 0.08) }
+      case Primary { break definition.primary }
+      case Secondary { break definition.secondary ?? definition.primary.tone(0.6, chromaScale: 0.5) }
+      case Success { break definition.success }
+      case Warning { break definition.warning }
+      case Danger { break definition.danger }
+      case Info { break definition.info }
+    }
+    Boolean dark = mode == ThemeMode.Dark
+    Boolean filled = appearance == Appearance.Filled
+    Boolean soft = appearance == Appearance.Soft || selected
+    Color background = surface.background
+    if filled { background = seed.tone(if selected { if dark { 0.72 } else { 0.38 } } else { if dark { 0.8 } else { 0.45 } }) }
+    else if soft { background = seed.tone(if selected { if dark { 0.38 } else { 0.86 } } else { if dark { 0.32 } else { 0.92 } }, chromaScale: 0.35) }
+    Color foreground = readable(seed, background, chromaScale: if filled { 0.06 } else { 0.7 })
+    Color hover = background.mix(other: foreground, amount: 0.08)
+    Color pressed = background.mix(other: foreground, amount: 0.14)
+    Color border = if appearance == Appearance.Outlined { outline } else { background }
+    Color disabledBackground = background.mix(other: surface.background, amount: 0.65)
+    return ControlColors(
+      normal: ControlState(background, foreground, border),
+      hovered: ControlState(background: hover, foreground: readable(seed, background: hover, chromaScale: if filled { 0.06 } else { 0.7 }), border: if appearance == Appearance.Outlined { outline } else { hover }),
+      pressed: ControlState(background: pressed, foreground: readable(seed, background: pressed, chromaScale: if filled { 0.06 } else { 0.7 }), border: if appearance == Appearance.Outlined { outline } else { pressed }),
+      disabled: ControlState(background: disabledBackground, foreground: foreground.mix(other: disabledBackground, amount: 0.6), border: border.mix(other: surface.background, amount: 0.65)),
+      focusRing: readable(seed, background: surface.background, chromaScale: 0.8)
+    )
+  }
+}
+
+Theme generateTheme(ThemeDefinition definition, ThemeMode mode = ThemeMode.Light) {
+  for seed : [definition.primary, definition.secondary ?? definition.primary, definition.neutral ?? definition.primary, definition.success, definition.warning, definition.danger, definition.info] {
+    if seed.alpha != 1.0 { throw Exception(message: "Theme seeds must be opaque") }
+  }
+  Boolean dark = mode == ThemeMode.Dark
+  Color neutral = definition.neutral ?? definition.primary.tone(0.5, chromaScale: 0.08)
+  Color canvas = neutral.tone(if dark { 0.15 } else { 0.98 })
+  Color surface = neutral.tone(if dark { 0.2 } else { 0.96 })
+  Color raised = neutral.tone(if dark { 0.26 } else { 1.0 })
+  return Theme(
+    definition, mode,
+    canvas: ColorPair(background: canvas, foreground: readable(seed: neutral, background: canvas, chromaScale: 0.2)),
+    surface: ColorPair(background: surface, foreground: readable(seed: neutral, background: surface, chromaScale: 0.2)),
+    surfaceRaised: ColorPair(background: raised, foreground: readable(seed: neutral, background: raised, chromaScale: 0.2)),
+    textMuted: readable(seed: neutral, background: surface, chromaScale: 0.1, muted: true),
+    outline: neutral.tone(if dark { 0.65 } else { 0.5 }),
+    divider: neutral.tone(if dark { 0.35 } else { 0.85 }),
+    scrim: Color(hex: "#000000").withOpacity(0.45)
+  )
+}
+
+private Color readable(Color seed, Color background, Double chromaScale, Boolean muted = false) {
+  Color black = Color(hex: "#000000")
+  Color white = Color(hex: "#FFFFFF")
+  Boolean lightText = background.contrast(white) >= background.contrast(black)
+  Double lightness = if lightText { if muted { 0.7 } else { 0.95 } } else { if muted { 0.48 } else { 0.2 } }
+  Color candidate = seed.tone(lightness, chromaScale)
+  if background.contrast(candidate) >= 4.5 { return candidate }
+  return if lightText { white } else { black }
+}

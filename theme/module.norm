@@ -1,0 +1,11 @@
+Module module() {
+  return module(
+    name: "theme",
+    version: 1,
+    exports: ["ColorMath", "color", "palette", "lifecycle"],
+    binding: jarBinding(
+      target: mavenJar(group: "dev.normlanguage", artifact: "theme-colors", version: "1", resolution: sha256("a4d1b9b082b2c964bc84d1fd550dcc30df74575e83b730919654e9370d0a39ab")),
+      api: [jarType(name: "ColorMath", members: ["parse", "format", "tone", "mix", "contrast", "opacity", "alpha"])]
+    )
+  )
+}

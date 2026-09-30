@@ -1,0 +1,47 @@
+package desktop
+
+import theme.Color
+import theme.Theme
+import theme.ThemeDefinition
+import theme.ThemeManager
+import theme.ThemeMode
+import theme.ThemeOverride
+import theme.Tone
+import theme.Appearance
+
+Void preview(Boolean verify = false) {
+  var window = previewNew()
+  var manager = ThemeManager(ThemeDefinition(primary: Color(hex: "#6750A4")))
+  var sidebar = manager.scope(ThemeOverride(mode: ThemeMode.Dark))
+  var subscription = manager.watch((Theme current) {
+    var button = current.control(tone: Tone.Primary, appearance: Appearance.Filled)
+    var fixed = sidebar.current()
+    window.apply(
+      arg0: current.canvas.background.hex(),
+      arg1: current.canvas.foreground.hex(),
+      arg2: button.normal.background.hex(),
+      arg3: button.normal.foreground.hex(),
+      arg4: fixed.surface.background.hex(),
+      arg5: fixed.surface.foreground.hex()
+    )
+  })
+  try {
+    window.show(verify)
+    Boolean running = true
+    for running {
+      var action = window.nextAction()!!
+      switch action {
+        case "toggle" { manager.setMode(if manager.current().mode == ThemeMode.Light { ThemeMode.Dark } else { ThemeMode.Light }) }
+        case "brand" { manager.setDefinition(ThemeDefinition(primary: Color(hex: "#008577"))) }
+        case "close" { running = false }
+        case _ {}
+      }
+    }
+    if verify { window.save("build/desktop-preview.png") }
+  } finally {
+    manager.close()
+    window.close()
+  }
+}
+
+Void main() { preview() }

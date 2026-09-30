@@ -1,0 +1,204 @@
+package theme
+
+import std.testing.Test
+import std.io.Resource
+import std.io.ResourceOwner
+import std.context.withContext
+import std.context.currentContext
+import std.core.Exception
+
+private class Counter { Integer calls = 0 }
+private class History { List<ThemeMode> modes = [] }
+private class SubscriptionHolder { Resource? subscription = null }
+
+private class Owner implements ResourceOwner {
+  List<Resource> resources = []
+  Void own(Resource resource) { resources.add(resource) }
+  Void release(Resource resource) { resources = [for (item : resources) if (item != resource) item] }
+  Void execute(Function<Void()> action) { withContext<ResourceOwner>(value: this, action: action) }
+}
+
+@Test
+Void initialDeliveryAndDuplicateFiltering() {
+  var manager = ThemeManager(ThemeDefinition(primary: Color(hex: "#B2DBEB")))
+  var counter = Counter()
+  var subscription = manager.watch((Theme theme) { counter.calls = counter.calls + 1 })
+  require(condition: counter.calls == 1, message: "immediate delivery")
+  manager.setMode(ThemeMode.Light)
+  require(condition: counter.calls == 1, message: "duplicate mode")
+  manager.setMode(ThemeMode.Dark)
+  require(condition: counter.calls == 2, message: "single delivery")
+  subscription.close()
+  manager.setMode(ThemeMode.Light)
+  require(condition: counter.calls == 2, message: "unsubscribed")
+  manager.close()
+}
+
+@Test
+Void scopesInheritAndPublishAtomically() {
+  var manager = ThemeManager(ThemeDefinition(primary: Color(hex: "#B2DBEB")))
+  var sidebar = manager.scope(ThemeOverride(mode: ThemeMode.Dark))
+  var preview = manager.scope(ThemeOverride(primary: Color(hex: "#E879A8")))
+  var sidebarCounter = Counter()
+  var sidebarWatch = sidebar.watch((Theme theme) { sidebarCounter.calls = sidebarCounter.calls + 1 })
+  var subscription = manager.watch((Theme theme) {
+    require(condition: preview.current().mode == theme.mode, message: "children published before root notification")
+  })
+  manager.setMode(ThemeMode.Dark)
+  require(condition: sidebarCounter.calls == 1, message: "unchanged child is not notified")
+  require(condition: preview.current().definition.primary == Color(hex: "#E879A8"), message: "override retained")
+  preview.setOverride(ThemeOverride())
+  require(condition: preview.current() == manager.current(), message: "inherit restored")
+  manager.close()
+  require(condition: sidebar.current().mode == ThemeMode.Dark, message: "closed snapshot retained")
+}
+
+@Test
+Void reentrantChangesAreDeliveredInOrder() {
+  var manager = ThemeManager(ThemeDefinition(primary: Color(hex: "#6750A4")))
+  var history = History()
+  var first = manager.watch((Theme theme) {
+    if theme.mode == ThemeMode.Dark { manager.setMode(ThemeMode.Light) }
+  })
+  var second = manager.watch((Theme theme) { history.modes.add(theme.mode) })
+  manager.setMode(ThemeMode.Dark)
+  require(condition: history.modes == [ThemeMode.Light, ThemeMode.Dark, ThemeMode.Light], message: "serialized reentrant notifications")
+  manager.close()
+}
+
+@Test
+Void ownershipAndFailureCleanup() {
+  var owner = Owner()
+  var manager = ThemeManager(ThemeDefinition(primary: Color(hex: "#6750A4")))
+  var subscription = withContext<ResourceOwner, Resource>(value: owner, action: () {
+    manager.watch((Theme theme) {})
+  })
+  require(condition: owner.resources.size() == 1, message: "subscription owned")
+  subscription.close()
+  subscription.close()
+  require(condition: owner.resources.size() == 0, message: "idempotent release")
+  var counter = Counter()
+  try {
+    manager.watch((Theme theme) { counter.calls = counter.calls + 1 throw Exception(message: "initial failure") })
+  } catch Exception failure {}
+  manager.setMode(ThemeMode.Dark)
+  require(condition: counter.calls == 1, message: "failed initial listener removed")
+  manager.close()
+}
+
+@Test
+Void listenerFailureDoesNotInterruptDelivery() {
+  var manager = ThemeManager(ThemeDefinition(primary: Color(hex: "#6750A4")))
+  var first = manager.watch((Theme theme) {
+    if theme.mode == ThemeMode.Dark { throw Exception(message: "listener failed") }
+  })
+  var counter = Counter()
+  var second = manager.watch((Theme theme) { counter.calls = counter.calls + 1 })
+  Boolean failed = false
+  try { manager.setMode(ThemeMode.Dark) } catch Exception failure { failed = true }
+  require(condition: failed, message: "failure reported")
+  require(condition: counter.calls == 2, message: "remaining listener delivered")
+  require(condition: manager.current().mode == ThemeMode.Dark, message: "published state retained")
+  manager.close()
+}
+
+@Test
+Void nestedWatchIsImmediateAndFailureReleasesIt() {
+  var manager = ThemeManager(ThemeDefinition(primary: Color(hex: "#6750A4")))
+  var counter = Counter()
+  var subscription = manager.watch((Theme theme) {
+    if theme.mode == ThemeMode.Dark {
+      Boolean caught = false
+      try {
+        manager.watch((Theme nested) {
+          counter.calls = counter.calls + 1
+          throw Exception(message: "nested initial failure")
+        })
+      } catch Exception error { caught = true }
+      require(condition: caught, message: "nested watch invokes before returning")
+    }
+  })
+  manager.setMode(ThemeMode.Dark)
+  manager.setMode(ThemeMode.Light)
+  require(condition: counter.calls == 1, message: "nested failed watch removed")
+  manager.close()
+}
+
+@Test
+Void closedScopesReleaseAllResources() {
+  var owner = Owner()
+  var manager = withContext<ResourceOwner, ThemeManager>(value: owner, action: () {
+    ThemeManager(ThemeDefinition(primary: Color(hex: "#6750A4")))
+  })
+  var child = withContext<ResourceOwner, ThemeScope>(value: owner, action: () {
+    manager.scope(ThemeOverride(mode: ThemeMode.Dark))
+  })
+  var subscription = withContext<ResourceOwner, Resource>(value: owner, action: () {
+    child.watch((Theme theme) {})
+  })
+  require(condition: owner.resources.size() == 3, message: "three owned resources")
+  manager.close()
+  manager.close()
+  child.close()
+  subscription.close()
+  require(condition: owner.resources.size() == 0, message: "cascading cleanup")
+  Boolean rejected = false
+  try { child.setOverride(ThemeOverride()) } catch Exception error { rejected = true }
+  require(condition: rejected, message: "closed child rejects updates")
+  rejected = false
+  try { manager.watch((Theme theme) {}) } catch Exception error { rejected = true }
+  require(condition: rejected, message: "closed source rejects subscriptions")
+}
+
+@Test
+Void invalidUpdateRetainsWholeTree() {
+  var manager = ThemeManager(ThemeDefinition(primary: Color(hex: "#6750A4")))
+  var child = manager.scope(ThemeOverride())
+  var before = manager.current()
+  Boolean rejected = false
+  try { manager.setDefinition(ThemeDefinition(primary: Color(hex: "#6750A480"))) }
+  catch Exception error { rejected = true }
+  require(condition: rejected, message: "transparent seed rejected")
+  require(condition: manager.current() == before && child.current() == before, message: "failed update is atomic")
+  manager.close()
+}
+
+@Test
+Void unsubscribeDuringDeliveryAndOwnerContext() {
+  var manager = ThemeManager(ThemeDefinition(primary: Color(hex: "#6750A4")))
+  var owner = Owner()
+  var holder = SubscriptionHolder()
+  var counter = Counter()
+  var first = manager.watch((Theme theme) {
+    if theme.mode == ThemeMode.Dark { holder.subscription?.close() }
+  })
+  holder.subscription = withContext<ResourceOwner, Resource>(value: owner, action: () {
+    manager.watch((Theme theme) {
+      counter.calls = counter.calls + 1
+      require(condition: currentContext<ResourceOwner>() == owner, message: "owner context restored")
+    })
+  })
+  manager.setMode(ThemeMode.Dark)
+  require(condition: counter.calls == 1, message: "closed pending delivery skipped")
+  require(condition: owner.resources.size() == 0, message: "closed subscriber released")
+  manager.close()
+}
+
+@Test
+Void configurePublishesOnceAndNestedOverridesRecover() {
+  var manager = ThemeManager(ThemeDefinition(primary: Color(hex: "#6750A4")))
+  var child = manager.scope(ThemeOverride(primary: Color(hex: "#B2DBEB")))
+  var grandchild = child.scope(ThemeOverride(mode: ThemeMode.Dark))
+  var counter = Counter()
+  var subscription = manager.watch((Theme theme) { counter.calls = counter.calls + 1 })
+  manager.configure(definition: ThemeDefinition(primary: Color(hex: "#008577")), mode: ThemeMode.Dark)
+  require(condition: counter.calls == 2, message: "one update for atomic configure")
+  var previous = grandchild.current()
+  Boolean rejected = false
+  try { child.setOverride(ThemeOverride(primary: Color(hex: "#FFFFFF00"))) }
+  catch Exception failure { rejected = true }
+  require(condition: rejected && grandchild.current() == previous, message: "failed override leaves subtree intact")
+  child.setOverride(ThemeOverride())
+  require(condition: grandchild.current() == manager.current(), message: "descendant override recomputed")
+  manager.close()
+}

@@ -1,0 +1,57 @@
+package theme
+
+import std.testing.Test
+
+@Test
+Void colorRoundTripAndValueEquality() {
+  require(condition: Color(hex: "#b2dbeb") == Color(hex: "#B2DBEBFF"), message: "canonical color equality")
+  require(condition: Color(hex: "#B2DBEB").hex() == "#B2DBEBFF", message: "RGBA hex")
+  require(condition: Color(hex: "#000000").contrast(Color(hex: "#FFFFFF")) == 21.0, message: "black white contrast")
+}
+
+@Test
+Void generatedPairsMeetContrast() {
+  for mode : [ThemeMode.Light, ThemeMode.Dark] {
+    for seed : ["#B2DBEB", "#6750A4", "#000000", "#FFFFFF", "#FF0000", "#00FF00", "#0000FF"] {
+      var theme = generateTheme(ThemeDefinition(primary: Color(hex: seed)), mode)
+      require(condition: theme.canvas.background.contrast(theme.canvas.foreground) >= 4.5, message: "canvas contrast")
+      require(condition: theme.surface.background.contrast(theme.surface.foreground) >= 4.5, message: "surface contrast")
+      for tone : [Tone.Neutral, Tone.Primary, Tone.Secondary, Tone.Success, Tone.Warning, Tone.Danger, Tone.Info] {
+        for appearance : [Appearance.Filled, Appearance.Soft, Appearance.Outlined, Appearance.Plain] {
+          for selected : [false, true] {
+            var colors = theme.control(tone, appearance, selected)
+            for state : [colors.normal, colors.hovered, colors.pressed] {
+              require(condition: state.background.contrast(state.foreground) >= 4.5, message: "control contrast")
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+@Test
+Void deterministicAndDistinctModes() {
+  var definition = ThemeDefinition(primary: Color(hex: "#B2DBEB"))
+  var light = generateTheme(definition, mode: ThemeMode.Light)
+  require(condition: light == generateTheme(definition, mode: ThemeMode.Light), message: "deterministic theme")
+  require(condition: light.canvas != generateTheme(definition, mode: ThemeMode.Dark).canvas, message: "distinct modes")
+  require(condition: light.control(Tone.Primary, appearance: Appearance.Filled).normal != light.control(Tone.Primary, appearance: Appearance.Filled).hovered, message: "hover distinction")
+}
+
+@Test
+Void selectionChangesEveryAppearance() {
+  var theme = generateTheme(ThemeDefinition(primary: Color(hex: "#6750A4")))
+  for appearance : [Appearance.Filled, Appearance.Soft, Appearance.Outlined, Appearance.Plain] {
+    require(condition: theme.control(tone: Tone.Primary, appearance: appearance).normal != theme.control(tone: Tone.Primary, appearance: appearance, selected: true).normal, message: "selected appearance must differ")
+  }
+}
+
+@Test
+Void mutedTextHasDistinctReadableEmphasis() {
+  for mode : [ThemeMode.Light, ThemeMode.Dark] {
+    var theme = generateTheme(ThemeDefinition(primary: Color(hex: "#808080")), mode: mode)
+    require(condition: theme.textMuted != theme.surface.foreground, message: "muted text must differ from primary text")
+    require(condition: theme.textMuted.contrast(theme.surface.background) >= 4.5, message: "muted text remains readable")
+  }
+}

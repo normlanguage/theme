@@ -1,0 +1,36 @@
+package theme
+
+value Color {
+  private Integer rgba
+
+  Color(String hex) { rgba = colorMathParse(hex) }
+  Color(Integer rgba) { this.rgba = rgba }
+
+  String hex() { colorMathFormat(rgba)!! }
+  Double alpha { get { colorMathAlpha(rgba) } }
+  Color withOpacity(Double alpha) { Color(rgba: colorMathOpacity(arg0: rgba, arg1: alpha)) }
+  Double contrast(Color other) { colorMathContrast(arg0: rgba, arg1: other.rgba) }
+  Color mix(Color other, Double amount) { Color(rgba: colorMathMix(arg0: rgba, arg1: other.rgba, arg2: amount)) }
+  Color tone(Double lightness, Double chromaScale = 1.0) {
+    Color(rgba: colorMathTone(arg0: rgba, arg1: lightness, arg2: chromaScale))
+  }
+}
+
+value ColorPair {
+  Color background
+  Color foreground
+}
+
+value ControlState {
+  Color background
+  Color foreground
+  Color border
+}
+
+value ControlColors {
+  ControlState normal
+  ControlState hovered
+  ControlState pressed
+  ControlState disabled
+  Color focusRing
+}

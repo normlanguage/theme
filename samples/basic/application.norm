@@ -1,0 +1,31 @@
+package basic
+
+import theme.Color
+import theme.Theme
+import theme.ThemeDefinition
+import theme.ThemeManager
+import theme.ThemeMode
+import theme.ThemeOverride
+import theme.ThemeSource
+import theme.Tone
+import theme.Appearance
+
+Void main() {
+  var manager = ThemeManager(ThemeDefinition(primary: Color(hex: "#B2DBEB")))
+  var sidebar = manager.scope(ThemeOverride(mode: ThemeMode.Dark))
+  ThemeSource source = manager
+  var subscription = source.watch((Theme theme) {
+    var colors = theme.control(tone: Tone.Primary, appearance: Appearance.Filled)
+    printLine(colors.normal.background.hex())
+  })
+  try {
+    manager.setMode(ThemeMode.Dark)
+    manager.configure(
+      definition: ThemeDefinition(primary: Color(hex: "#6750A4")),
+      mode: ThemeMode.Light
+    )
+    require(condition: sidebar.current().mode == ThemeMode.Dark, message: "local mode remains dark")
+  } finally {
+    manager.close()
+  }
+}

@@ -1,0 +1,11 @@
+Module module() {
+  module(
+    name: "desktop",
+    exports: ["Preview"],
+    dependencies: [dependency(repository: "github", name: "theme", version: 1)],
+    binding: jarBinding(
+      target: localJar(path: "lib/preview.jar", integrity: sha256("eb16579b1f93ab5bc0ce072d62eadb8fa08d43660425b98233da4eac7db0e3ef")),
+      api: [jarType(name: "Preview", members: ["new", "show", "apply", "nextAction", "save", "close"])]
+    )
+  )
+}

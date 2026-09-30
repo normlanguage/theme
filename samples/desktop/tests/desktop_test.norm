@@ -1,0 +1,6 @@
+package desktop
+
+import std.testing.Test
+
+@Test
+Void switchingPreservesLiveControls() { preview(verify: true) }
