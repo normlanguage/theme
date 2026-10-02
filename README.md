@@ -50,6 +50,6 @@ Set `JAVA_HOME` to JDK 21, or pass `-JavaHome` to the build and desktop scripts.
 
 `scripts/norm.ps1` isolates candidate packages in `.norm-home`; it does not install into the user's normal package cache. After intentionally changing the color kernel, rebuild with `./scripts/build.ps1 -UpdatePin` and review the resulting module digest.
 
-The local Maven repository in `build/repository` contains the kernel JAR/POM and the packaged Norm module. Public installation requires publishing both the kernel Maven artifact and the Norm release, then registering the module. Building a candidate does not publish anything.
+The local Maven repository in `build/repository` contains the kernel JAR/POM and the packaged Norm module. Publish the packaged NAR and SHA-256 sidecar through GitHub Releases. Norm 0.26.1 and newer include and verify the kernel dependency in that package; consumers declare `dependency(repository: "github", name: "theme", version: 1)`. Building a candidate does not publish anything.
 
 [Desktop sample](samples/README.md) opens an interactive preview without verification mode.
